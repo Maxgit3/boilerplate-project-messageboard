@@ -78,13 +78,6 @@ module.exports = function (app) {
       .then(thread => {
         newBoard.threads.push(thread);
         return newBoard.save().then(() => {
-          // return res.json({
-          //   _id: thread._id,
-          //   text: thread.text,
-          //   created_on: thread.created_on,
-          //   bumped_on: thread.bumped_on,
-          //   replies: thread.replies
-          // });
           return res.json(thread);
         });
       })
@@ -128,35 +121,155 @@ module.exports = function (app) {
       }
 
     })
-  });
+  }).delete(function (req, res) {
+    // Handle thread deletion
+    const { thread_id, delete_password } = req.body;
+    if (!thread_id || !delete_password) {
+      return res.status(400).json({ error: 'Thread ID and delete_password are required' });
+    }
+    Thread.findById(thread_id).then(thread => {
+      if (!thread) {
+        return res.status(404).json({ error: 'Thread not found' });
+      }
+      if (thread.delete_password !== delete_password) {
+        return res.status(200).send('incorrect password');
+      }
+      return Thread.findByIdAndDelete(thread_id).then(() => {
+        // Remove thread from board
+        return Board.findOneAndUpdate(
+          { name: thread.board },
+          { $pull: { threads: thread_id } },
+          { new: true }
+        ).then(() => res.send('success'));
+      });
+    }
+    ).catch(err => {
+      console.error('Error handling thread deletion:', err);
+      return res.status(500).send('Error deleting thread');
+    }
+    )
+  }).put(function (req, res) {
+    const { thread_id } = req.body;
+    if (!thread_id) {
+      return res.status(400).json({ error: 'Thread ID is required' });
+    }
+    Thread.findByIdAndUpdate(thread_id, { reported: true }).then(thread => {
+      if (!thread) {
+        return res.status(404).json({ error: 'Thread not found' });
+      }
+      if (thread.reported) {
+        return res.status(200).send('Thread already reported');
+      }
+      console.log('Thread reported:', thread_id);
+      res.send('success');
+    })
+  })
 
   app.route('/api/replies/:board').post(function (req, res) {
-    // Handle reply creation
     const { board } = req.params;
     const { thread_id, text, delete_password } = req.body;
     if (!thread_id || !text || !delete_password) {
       return res.status(400).json({ error: 'Thread ID, text, and delete_password are required' });
     }
+
     Thread.findById(thread_id)
       .then(thread => {
         if (!thread) {
           return res.status(404).json({ error: 'Thread not found' });
         }
+
         const newReply = new Reply({
           thread: thread_id,
           text,
           delete_password,
-          board
+          reported: false,
+          board,
+          created_on: new Date()
         });
-        console.log('Creating new reply:', newReply);
 
-        return newReply.save().then(reply => {
-          thread.replies.push({ _id: reply._id, text: reply.text, created_on: reply.created_on, delete_password: reply.delete_password, reported: reply.reported });
-          thread.bumped_on = Date.now();
-          return thread.save().then(() => res.json(reply));
+        return newReply.save().then(savedReply => {
+          thread.replies.push(savedReply); // Use the actual saved reply
+          thread.bumped_on = savedReply.created_on;
+          return thread.save().then(() => res.redirect(`/b/${board}/${thread_id}`));
         });
       })
       .catch(err => res.status(500).json({ error: 'Failed to create reply' }));
+  }).get(function (req, res) {
+    const { thread_id } = req.query;
+    if (!thread_id) {
+      return res.status(400).json({ error: 'Thread ID is required' });
+    }
+
+    Thread.findById(thread_id)
+      .then(thread => {
+        if (!thread) {
+          return res.status(404).json({ error: 'Thread not found' });
+        }
+
+        // Format replies to exclude sensitive fields
+        const formattedReplies = thread.replies.map(reply => ({
+          _id: reply._id,
+          text: reply.text,
+          created_on: reply.created_on
+        }));
+
+        const formattedThread = {
+          _id: thread._id,
+          text: thread.text,
+          created_on: thread.created_on,
+          bumped_on: thread.bumped_on,
+          replies: formattedReplies
+        };
+
+        res.json(formattedThread);
+      })
+      .catch(err => {
+        console.error('Error fetching thread:', err);
+        res.status(500).json({ error: 'Server error' });
+      });
+  }).delete(function (req, res) {
+    const { thread_id, reply_id, delete_password } = req.body;
+    if (!thread_id || !reply_id || !delete_password) {
+      return res.status(400).json({ error: 'Thread ID, reply ID, and delete_password are required' });
+    }
+    Thread.findById(thread_id).then(thread => {
+      if (!thread) {
+        return res.status(404).json({ error: 'Thread not found' });
+      }
+      const reply = thread.replies.find(r => r._id.toString() === reply_id);
+
+      if (!reply) {
+        return res.status(404).json({ error: 'Reply not found' });
+      }
+      console.log('Reply found:', reply);
+      Reply.findById(reply_id).then(foundReply => {
+        if (!foundReply) {
+          return res.status(404).json({ error: 'Reply not found' });
+        }
+        if (foundReply.delete_password !== delete_password) {
+          return res.status(200).send('incorrect password');
+        }
+        // Delete the Reply from its collection
+        foundReply.deleteOne().then(() => {
+          const embeddedReply = thread.replies.id(reply_id);
+          if (!embeddedReply) {
+            return res.status(404).send('Embedded reply not found');
+          }
+
+          embeddedReply.text = '[deleted]';
+          return thread.save().then(() => res.send('success'));
+        }).catch(err => {
+          console.error('Error deleting reply:', err);
+          return res.status(500).send('Error deleting reply');
+        });
+
+      })
+
+    }).catch(err => {
+      console.error('Error handling reply deletion:', err);
+      return res.status(500).send('Error deleting reply');
+    }
+    );
   });
 
 };
