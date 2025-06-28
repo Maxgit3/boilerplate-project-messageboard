@@ -153,16 +153,25 @@ module.exports = function (app) {
     if (!thread_id) {
       return res.status(400).json({ error: 'Thread ID is required' });
     }
-    Thread.findByIdAndUpdate(thread_id, { reported: true }).then(thread => {
-      if (!thread) {
-        return res.status(404).json({ error: 'Thread not found' });
-      }
-      if (thread.reported) {
-        return res.status(200).send('Thread already reported');
-      }
-      console.log('Thread reported:', thread_id);
-      res.send('success');
-    })
+    Thread.findById(thread_id)
+      .then(thread => {
+        if (!thread) {
+          return res.status(404).json({ error: 'Thread not found' });
+        }
+        if (thread.reported) {
+          return res.status(200).send('Thread already reported');
+        }
+
+        thread.reported = true;
+        return thread.save().then(() => {
+          console.log('Thread reported:', thread_id);
+          res.send('reported');
+        });
+      })
+      .catch(err => {
+        console.error(err);
+        res.status(500).json({ error: 'Internal server error' });
+      });
   })
 
   app.route('/api/replies/:board').post(function (req, res) {
@@ -270,6 +279,32 @@ module.exports = function (app) {
       return res.status(500).send('Error deleting reply');
     }
     );
+  }).put(function (req, res) {
+    const { thread_id, reply_id } = req.body;
+    if (!thread_id || !reply_id) {
+      return res.status(400).json({ error: 'Thread ID and reply ID are required' });
+    }
+    Thread.findById(thread_id)
+      .then(thread => {
+        if (!thread) {
+          return res.status(404).json({ error: 'Thread not found' });
+        }
+        const reply = thread.replies.id(reply_id);
+        if (!reply) {
+          return res.status(404).json({ error: 'Reply not found' });
+        }
+        if (reply.reported) {
+          return res.status(200).send('Reply already reported');
+        }
+        console.log('Reply found for reporting:', reply_id);
+        reply.reported = true;
+        thread.bumped_on = new Date(); // Update bumped_on to the current time
+        thread.save();
+        Reply.findByIdAndUpdate(reply_id, { reported: true });
+        console.log('Reply reported:', reply_id);
+        res.send('success');
+      })
+
   });
 
 };
