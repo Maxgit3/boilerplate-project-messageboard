@@ -302,7 +302,7 @@ module.exports = function (app) {
         thread.save();
         Reply.findByIdAndUpdate(reply_id, { reported: true });
         console.log('Reply reported:', reply_id);
-        res.send('success');
+        res.send('reported');
       })
 
   });
